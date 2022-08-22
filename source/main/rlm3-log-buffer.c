@@ -11,7 +11,8 @@
 #define LOG_MAGIC (0x4C4F474D) // 'LOGM'
 #define FAULT_MAGIC (0x464F554C) // 'FOUL'
 
-#define FULL_BUFFER_RESTART_LIMIT (sizeof(EXTERNAL_MEMORY->log_buffer) / 2)
+static const size_t BUFFER_SIZE = sizeof(ExternalMemoryLayout::log_buffer);
+static const size_t FULL_BUFFER_RESTART_LIMIT = BUFFER_SIZE / 2;
 
 
 LOGGER_ZONE(LOG_BUFFER);
@@ -20,15 +21,17 @@ LOGGER_ZONE(LOG_BUFFER);
 static RLM3_MutexLock g_lock;
 static volatile bool g_is_initialized = false;
 static volatile bool g_is_overflow = false;
-static size_t g_debug_output_cursor;
 static volatile size_t g_log_allocation_head;
 static volatile size_t g_active_logger_count = 0;
+
+static const char* g_debug_channel = NULL;
+static size_t g_debug_head;
 
 
 static void FormatToBufferFn(void* data, char c)
 {
 	size_t* cursor = (size_t*)data;
-	EXTERNAL_MEMORY->log_buffer[(*cursor)++ % sizeof(EXTERNAL_MEMORY->log_buffer)] = c;
+	EXTERNAL_MEMORY->log_buffer[(*cursor)++ % BUFFER_SIZE] = c;
 }
 
 static void FormatToDebugOutput(void* data, char c)
@@ -60,16 +63,18 @@ static bool BeginOutputToBuffer(size_t size, size_t* offset_out)
 
 	bool result = false;
 	uint32_t saved_level = EnterCritical();
-	size_t available_size = sizeof(external_memory->log_buffer) - (g_log_allocation_head - external_memory->log_tail);
+	size_t available_size = BUFFER_SIZE - (g_log_allocation_head - external_memory->log_tail);
 	if (size > available_size)
 	{
 		g_is_overflow = true;
 	}
 	else if (!g_is_overflow)
 	{
-		size_t head = g_log_allocation_head;
+		size_t head = g_debug_head;
 		*offset_out = head;
 		g_log_allocation_head = head + size;
+		g_debug_head = head + size;
+		g_debug_channel = NULL;
 		g_active_logger_count++;
 		result = true;
 	}
@@ -98,14 +103,16 @@ extern void RLM3_LogBuffer_Init()
 
 	// If the current log information in the external memory is not valid, reset it.
 	ExternalMemoryLayout* external_memory = (ExternalMemoryLayout*)RLM3_EXTERNAL_MEMORY_ADDRESS;
-	if (external_memory->log_magic != LOG_MAGIC || external_memory->log_head - external_memory->log_tail > sizeof(external_memory->log_buffer))
+	if (external_memory->log_magic != LOG_MAGIC || external_memory->log_head - external_memory->log_tail > BUFFER_SIZE)
 	{
 		external_memory->log_head = 0;
 		external_memory->log_tail = 0;
 	}
 	external_memory->log_magic = LOG_MAGIC;
-	g_debug_output_cursor = external_memory->log_tail;
 	g_log_allocation_head = external_memory->log_head;
+	g_debug_head = g_log_allocation_head;
+	g_debug_channel = NULL;
+	g_is_overflow = false;
 
 	if (external_memory->fault_magic == FAULT_MAGIC)
 	{
@@ -243,10 +250,120 @@ extern uint32_t RLM3_LogBuffer_FetchBlock(size_t max_size)
 		target = tail + max_size;
 	// Try to reduce it so the block ends with a newline.
 	for (uint32_t i = 0; i < target - tail; i++)
-		if (EXTERNAL_MEMORY->log_buffer[(target - i - 1) % sizeof(EXTERNAL_MEMORY->log_buffer)] == '\n')
+		if (EXTERNAL_MEMORY->log_buffer[(target - i - 1) % BUFFER_SIZE] == '\n')
 			return target - i;
 	// The block does not have a newline to break on.
 	return target;
 }
+
+extern void RLM3_LogBuffer_DebugChar(const char* channel, char c)
+{
+	if (!g_is_initialized)
+	{
+		RLM3_DebugOutput(c);
+		return;
+	}
+
+	ExternalMemoryLayout* external_memory = (ExternalMemoryLayout*)RLM3_EXTERNAL_MEMORY_ADDRESS;
+
+	bool is_irq = RLM3_IsIRQ();
+	RLM3_Time tick_count = (is_irq ? RLM3_GetCurrentTimeFromISR() : RLM3_GetCurrentTime());
+
+	size_t header_size = RLM3_FormatNoNul(NULL, 0, "L %u TRACE %s ", (int)tick_count, channel);
+
+	uint32_t saved_level = EnterCritical();
+	if (c == '\n')
+	{
+		g_log_allocation_head = g_debug_head;
+		if (g_active_logger_count == 0)
+			external_memory->log_head = g_debug_head;
+		ExitCritical(saved_level);
+		return;
+	}
+	size_t available_size = BUFFER_SIZE - (g_log_allocation_head - external_memory->log_tail);
+	if (channel != g_debug_channel)
+	{
+		// Allocate enough space for the header and this character.
+		g_debug_head
+		if (size > available_size)
+		{
+			g_is_overflow = true;
+		}
+		else if (!g_is_overflow)
+		{
+			size_t head = g_log_allocation_head;
+			*offset_out = head;
+			g_log_allocation_head = head + size;
+			g_active_logger_count++;
+			result = true;
+		}
+
+
+		size_t position;
+		bool result = BeginOutputToBuffer(header_size + 2, &position);
+		ExitCritical(saved_level);
+
+		if (!result)
+			return;
+
+		g_debug_channel = channel
+		RLM3_FormatNoNul(FormatToBufferFn, &position, "L %u TRACE %s ", (int)tick_count, channel);
+		EXTERNAL_MEMORY->log_buffer[(position + 0) % BUFFER_SIZE] = c;
+		EXTERNAL_MEMORY->log_buffer[(position + 1) % BUFFER_SIZE] = '\n';
+
+		EndOutputToBuffer();
+	}
+	else if (BUFFER_SIZE - (g_log_allocation_head - external_memory->log_tail) > 1)
+	{
+		// Allocate one new character.
+		EXTERNAL_MEMORY->log_buffer[(g_log_allocation_head - 1) % BUFFER_SIZE] = c;
+		EXTERNAL_MEMORY->log_buffer[(g_log_allocation_head - 0) % BUFFER_SIZE] = '\n';
+		g_log_allocation_head++;
+	}
+	else
+	{
+		// There is no room.
+		ExitCritical(saved_level);
+		return;
+	}
+	ExitCritical(saved_level);
+
+	if (include_header)
+		RLM3_FormatNoNul(FormatToBufferFn, &position, "L %u %s %s ", (int)tick_count, "TRACE", channel);
+
+	EXTERNAL_MEMORY->log_buffer[(position + 0) % BUFFER_SIZE] = c;
+	EXTERNAL_MEMORY->log_buffer[(position + 1) % BUFFER_SIZE] = '\n';
+
+
+
+
+	RLM3_FnFormat(FormatToBufferFn, &offset, "L %u %s %s ", (int)tick_count, level, zone);
+	RLM3_FnVFormat(FormatToBufferFn, &offset, format, params);
+
+}
+
+/*
+	ExternalMemoryLayout* external_memory = (ExternalMemoryLayout*)RLM3_EXTERNAL_MEMORY_ADDRESS;
+
+	bool result = false;
+	uint32_t saved_level = EnterCritical();
+	g_debug_channel = NULL;
+	size_t available_size = BUFFER_SIZE - (g_log_allocation_head - external_memory->log_tail);
+	if (size > available_size)
+	{
+		g_is_overflow = true;
+	}
+	else if (!g_is_overflow)
+	{
+		size_t head = g_log_allocation_head;
+		*offset_out = head;
+		g_log_allocation_head = head + size;
+		g_active_logger_count++;
+		result = true;
+	}
+	ExitCritical(saved_level);
+	return result;
+
+ */
 
 

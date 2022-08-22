@@ -6,9 +6,13 @@
 #include "rlm3-sim.hpp"
 #include <cstring>
 #include <cstdio>
+#include <limits>
 
 
 static constexpr size_t BUFFER_SIZE = sizeof(ExternalMemoryLayout::log_buffer);
+
+
+static_assert(((uint64_t)std::numeric_limits<uint32_t>::max() + 1) % BUFFER_SIZE == 0);
 
 
 TEST_CASE(RLM3_LogBuffer_Lifecycle)
@@ -299,7 +303,7 @@ TEST_CASE(RLM3_LogBuffer_Overflow)
 	for (size_t i = 0; i < BUFFER_SIZE / 2; i += 1024)
 		EXTERNAL_MEMORY->log_tail = RLM3_LogBuffer_FetchBlock(1024);
 
-	// Try adding another message.  It should be added.
+	// Try adding another message.  It should be successfully added.
 	RLM3_LogBuffer_FormatRawMessage("12345678901"); // 12 characters.
 	ASSERT(EXTERNAL_MEMORY->log_head == 0x12345678 + BUFFER_SIZE - 11 + 12);
 }
