@@ -11,12 +11,15 @@
 #define LOG_MAGIC (0x4C4F474D) // 'LOGM'
 #define FAULT_MAGIC (0x464F554C) // 'FOUL'
 
+#define FULL_BUFFER_RESTART_LIMIT (sizeof(EXTERNAL_MEMORY->log_buffer) / 2)
+
 
 LOGGER_ZONE(LOG_BUFFER);
 
 
 static RLM3_MutexLock g_lock;
 static volatile bool g_is_initialized = false;
+static volatile bool g_is_overflow = false;
 static size_t g_debug_output_cursor;
 static volatile size_t g_log_allocation_head;
 static volatile size_t g_active_logger_count = 0;
@@ -58,7 +61,11 @@ static bool BeginOutputToBuffer(size_t size, size_t* offset_out)
 	bool result = false;
 	uint32_t saved_level = EnterCritical();
 	size_t available_size = sizeof(external_memory->log_buffer) - (g_log_allocation_head - external_memory->log_tail);
-	if (size <= available_size)
+	if (size > available_size)
+	{
+		g_is_overflow = true;
+	}
+	else if (!g_is_overflow)
 	{
 		size_t head = g_log_allocation_head;
 		*offset_out = head;
@@ -218,3 +225,28 @@ extern void RLM3_LogBuffer_FormatRawMessage(const char* format, ...)
 	RLM3_LogBuffer_WriteRawMessage(format, args);
 	va_end(args);
 }
+
+extern uint32_t RLM3_LogBuffer_FetchBlock(size_t max_size)
+{
+	ASSERT(g_is_initialized);
+	uint32_t head = EXTERNAL_MEMORY->log_head;
+	uint32_t tail = EXTERNAL_MEMORY->log_tail;
+	// If the buffer gets full, we wait until it is half empty to add anything else in it.  This ensures we have reasonably coherent logs.
+	if (g_is_overflow && head - tail < FULL_BUFFER_RESTART_LIMIT)
+	{
+		g_is_overflow = false;
+		LOG_ALWAYS("Overflow");
+	}
+	// Get the largest chunk of the buffer that is available.
+	uint32_t target = head;
+	if (target - tail > max_size)
+		target = tail + max_size;
+	// Try to reduce it so the block ends with a newline.
+	for (uint32_t i = 0; i < target - tail; i++)
+		if (EXTERNAL_MEMORY->log_buffer[(target - i - 1) % sizeof(EXTERNAL_MEMORY->log_buffer)] == '\n')
+			return target - i;
+	// The block does not have a newline to break on.
+	return target;
+}
+
+
