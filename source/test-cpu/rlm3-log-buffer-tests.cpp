@@ -308,6 +308,143 @@ TEST_CASE(RLM3_LogBuffer_Overflow)
 	ASSERT(EXTERNAL_MEMORY->log_head == 0x12345678 + BUFFER_SIZE - 11 + 12);
 }
 
+TEST_CASE(RLM3_LogBuffer_DebugChar_HappyCase)
+{
+	RLM3_MEMORY_Init();
+	RLM3_LogBuffer_Init();
+
+	RLM3_LogBuffer_DebugChar("test-channel", 'a');
+	RLM3_LogBuffer_DebugChar("test-channel", 'b');
+	RLM3_LogBuffer_DebugChar("test-channel", 'c');
+	RLM3_LogBuffer_DebugChar("test-channel", '\n');
+
+	const char* expected = "D test-channel abc\n";
+	size_t length = std::strlen(expected);
+	ASSERT(EXTERNAL_MEMORY->log_tail == 0);
+	ASSERT(EXTERNAL_MEMORY->log_head == length);
+	ASSERT(std::strncmp(EXTERNAL_MEMORY->log_buffer, expected, length) == 0);
+}
+
+TEST_CASE(RLM3_LogBuffer_DebugChar_FirstChar)
+{
+	RLM3_MEMORY_Init();
+	RLM3_LogBuffer_Init();
+
+	RLM3_LogBuffer_DebugChar("test-channel", 'a');
+
+	const char* expected = "D test-channel a\n";
+	size_t length = std::strlen(expected);
+	ASSERT(EXTERNAL_MEMORY->log_tail == 0);
+	ASSERT(EXTERNAL_MEMORY->log_head == 0); // This line is not available yet.
+	ASSERT(std::strncmp(EXTERNAL_MEMORY->log_buffer, expected, length) == 0);
+}
+
+TEST_CASE(RLM3_LogBuffer_DebugChar_SecondChar)
+{
+	RLM3_MEMORY_Init();
+	RLM3_LogBuffer_Init();
+
+	RLM3_LogBuffer_DebugChar("test-channel", 'a');
+	RLM3_LogBuffer_DebugChar("test-channel", 'b');
+
+	const char* expected = "D test-channel ab\n";
+	size_t length = std::strlen(expected);
+	ASSERT(EXTERNAL_MEMORY->log_tail == 0);
+	ASSERT(EXTERNAL_MEMORY->log_head == 0); // This line is not available yet.
+	ASSERT(std::strncmp(EXTERNAL_MEMORY->log_buffer, expected, length) == 0);
+}
+
+TEST_CASE(RLM3_LogBuffer_DebugChar_TwoChannels)
+{
+	RLM3_MEMORY_Init();
+	RLM3_LogBuffer_Init();
+
+	RLM3_LogBuffer_DebugChar("test-channel", 'a');
+	RLM3_LogBuffer_DebugChar("test-channel", 'b');
+	RLM3_LogBuffer_DebugChar("second", 'c');
+	RLM3_LogBuffer_DebugChar("second", 'd');
+
+	const char* expected = "D test-channel ab\nD second cd\n";
+	size_t length = std::strlen(expected);
+	ASSERT(EXTERNAL_MEMORY->log_tail == 0);
+	ASSERT(EXTERNAL_MEMORY->log_head == 18); // Only the first line is available yet.
+	ASSERT(std::strncmp(EXTERNAL_MEMORY->log_buffer, expected, length) == 0);
+}
+
+TEST_CASE(RLM3_LogBuffer_DebugChar_FollowedWithLog)
+{
+	RLM3_MEMORY_Init();
+	RLM3_LogBuffer_Init();
+
+	RLM3_LogBuffer_DebugChar("test-channel", 'a');
+	RLM3_LogBuffer_DebugChar("test-channel", 'b');
+	RLM3_LogBuffer_FormatRawMessage("CD");
+
+	const char* expected = "D test-channel ab\nCD\n";
+	size_t length = std::strlen(expected);
+	ASSERT(EXTERNAL_MEMORY->log_tail == 0);
+	ASSERT(EXTERNAL_MEMORY->log_head == length);
+	ASSERT(std::strncmp(EXTERNAL_MEMORY->log_buffer, expected, length) == 0);
+}
+
+TEST_CASE(RLM3_LogBuffer_DebugChar_InitialJustFits)
+{
+	RLM3_MEMORY_Init();
+	EXTERNAL_MEMORY->log_magic = 0x4C4F474D;
+	EXTERNAL_MEMORY->log_tail = 0x12345678;
+	EXTERNAL_MEMORY->log_head = 0x12345678 + BUFFER_SIZE - 17;
+	RLM3_LogBuffer_Init();
+
+	RLM3_LogBuffer_DebugChar("test-channel", 'a');
+	RLM3_LogBuffer_DebugChar("test-channel", '\n');
+
+	ASSERT(EXTERNAL_MEMORY->log_head == 0x12345678 + BUFFER_SIZE);
+}
+
+TEST_CASE(RLM3_LogBuffer_DebugChar_InitialFull)
+{
+	RLM3_MEMORY_Init();
+	EXTERNAL_MEMORY->log_magic = 0x4C4F474D;
+	EXTERNAL_MEMORY->log_tail = 0x12345678;
+	EXTERNAL_MEMORY->log_head = 0x12345678 + BUFFER_SIZE - 16;
+	RLM3_LogBuffer_Init();
+
+	RLM3_LogBuffer_DebugChar("test-channel", 'a');
+	RLM3_LogBuffer_DebugChar("test-channel", '\n');
+
+	ASSERT(EXTERNAL_MEMORY->log_head == 0x12345678 + BUFFER_SIZE - 16);
+}
+
+TEST_CASE(RLM3_LogBuffer_DebugChar_SecondJustFits)
+{
+	RLM3_MEMORY_Init();
+	EXTERNAL_MEMORY->log_magic = 0x4C4F474D;
+	EXTERNAL_MEMORY->log_tail = 0x12345678;
+	EXTERNAL_MEMORY->log_head = 0x12345678 + BUFFER_SIZE - 18;
+	RLM3_LogBuffer_Init();
+
+	RLM3_LogBuffer_DebugChar("test-channel", 'a');
+	RLM3_LogBuffer_DebugChar("test-channel", 'b');
+	RLM3_LogBuffer_DebugChar("test-channel", '\n');
+
+	ASSERT(EXTERNAL_MEMORY->log_head == 0x12345678 + BUFFER_SIZE);
+}
+
+TEST_CASE(RLM3_LogBuffer_DebugChar_SecondFull)
+{
+	RLM3_MEMORY_Init();
+	EXTERNAL_MEMORY->log_magic = 0x4C4F474D;
+	EXTERNAL_MEMORY->log_tail = 0x12345678;
+	EXTERNAL_MEMORY->log_head = 0x12345678 + BUFFER_SIZE - 17;
+	RLM3_LogBuffer_Init();
+
+	RLM3_LogBuffer_DebugChar("test-channel", 'a');
+	RLM3_LogBuffer_DebugChar("test-channel", 'b');
+	RLM3_LogBuffer_DebugChar("test-channel", '\n');
+
+	ASSERT(EXTERNAL_MEMORY->log_head == 0x12345678 + BUFFER_SIZE);
+}
+
 TEST_TEARDOWN(LOG_BUFFER_TEARDOWN)
 {
 	if (RLM3_LogBuffer_IsInit())
