@@ -24,7 +24,6 @@ extern void RLM3_LogBuffer_DebugChar(const char* channel, char c);
 extern uint32_t RLM3_LogBuffer_FetchBlock(size_t max_size);
 
 
-
 #ifdef __cplusplus
 }
 #endif

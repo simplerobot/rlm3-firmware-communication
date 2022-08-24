@@ -90,6 +90,7 @@ static void EndOutputToBuffer()
 	uint32_t saved_level = EnterCritical();
 	if (--g_active_logger_count == 0)
 		external_memory->log_head = g_log_allocation_head;
+	g_debug_channel = NULL;
 	ExitCritical(saved_level);
 }
 
